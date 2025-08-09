@@ -1,0 +1,56 @@
+// Package service
+package service
+
+import (
+	"orderkeeper/internal/cache"
+	"orderkeeper/internal/models"
+	"orderkeeper/internal/repository"
+)
+
+type OrderService interface {
+	CreateOrder(order models.Order) error
+	GetOrderByID(id string) (models.Order, error)
+	RestoreCache() error // Новый метод для восстановления кэша
+}
+
+type orderService struct {
+	repo  repository.OrderRepository
+	cache *cache.OrderCache // Добавляем кэш
+}
+
+func NewOrderService(repo repository.OrderRepository, cache *cache.OrderCache) OrderService {
+	return &orderService{repo: repo, cache: cache}
+}
+
+func (s *orderService) CreateOrder(order models.Order) error {
+	if err := s.repo.CreateOrder(order); err != nil {
+		return err
+	}
+
+	s.cache.Set(order)
+	return nil
+}
+
+func (s *orderService) GetOrderByID(id string) (models.Order, error) {
+	if order, exists := s.cache.Get(id); exists {
+		return order, nil
+	}
+
+	order, err := s.repo.GetOrderByID(id)
+	if err != nil {
+		return models.Order{}, err
+	}
+
+	s.cache.Set(order)
+	return order, nil
+}
+
+func (s *orderService) RestoreCache() error {
+	orders, err := s.repo.GetAllOrders()
+	if err != nil {
+		return err
+	}
+
+	s.cache.LoadFromDB(orders)
+	return nil
+}
