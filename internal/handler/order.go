@@ -19,6 +19,17 @@ func NewOrderHandler(orderService service.OrderService) *OrderHandler {
 	return &OrderHandler{orderService: orderService}
 }
 
+// CreateOrderHandler godoc
+// @Summary Create a new order
+// @Description Create a new order from JSON data
+// @Tags orders
+// @Accept  json
+// @Produce  json
+// @Param order body models.Order true "Order data"
+// @Success 201 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /order [post]
 func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request) {
 	var order models.Order
 	if err := json.NewDecoder(r.Body).Decode(&order); err != nil {
@@ -53,6 +64,18 @@ func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// GetOrderByIDHandler godoc
+// @Summary Get order by ID
+// @Description Get order details by order_uid
+// @Tags orders
+// @Accept  json
+// @Produce  json
+// @Param id path string true "Order ID"
+// @Success 200 {object} models.Order
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /order/{id} [get]
 func (h *OrderHandler) GetOrderByIDHandler(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {

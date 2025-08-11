@@ -1,3 +1,9 @@
+// @title OrderKeeper API
+// @version 1.0
+// @description API for managing orders
+
+// @host localhost:8080
+// @BasePath /
 package main
 
 import (
@@ -5,6 +11,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	_ "orderkeeper/docs"
 	"orderkeeper/internal/cache"
 	"orderkeeper/internal/handler"
 	"orderkeeper/internal/kafka"
@@ -13,12 +20,14 @@ import (
 	"orderkeeper/internal/service"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/joho/godotenv"
+	httpSwagger "github.com/swaggo/http-swagger"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -79,9 +88,21 @@ func main() {
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.Timeout(60 * time.Second))
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, ".js") {
+				w.Header().Set("Content-Type", "application/javascript")
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	r.Post("/order", orderHandler.CreateOrderHandler)
 	r.Get("/order/{id}", orderHandler.GetOrderByIDHandler)
+
+	r.Get("/swagger/*", httpSwagger.Handler(
+		httpSwagger.URL("doc.json"), // URL для JSON документации
+	))
 
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "web/index.html")
@@ -145,10 +166,15 @@ func initDBWithRetry(maxAttempts int, initialDelay time.Duration) (*gorm.DB, err
 		dbInstance, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 		if err == nil {
 			if err = dbInstance.AutoMigrate(
+				&models.Order{},
+			); err != nil {
+				return nil, err
+			}
+
+			if err = dbInstance.AutoMigrate(
 				&models.Delivery{},
 				&models.Payment{},
 				&models.Item{},
-				&models.Order{},
 			); err != nil {
 				return nil, err
 			}

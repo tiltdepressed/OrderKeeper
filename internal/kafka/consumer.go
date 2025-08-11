@@ -1,5 +1,4 @@
 // Package kafka
-// Package kafka
 package kafka
 
 import (
@@ -45,7 +44,6 @@ func (c *Consumer) Run(ctx context.Context) {
 			msg, err := c.reader.FetchMessage(ctx)
 			if err != nil {
 				if ctx.Err() != nil {
-					// Контекст отменен, выходим
 					return
 				}
 				log.Printf("Error fetching message: %v", err)
