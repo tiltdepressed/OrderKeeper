@@ -101,7 +101,7 @@ func main() {
 	r.Get("/order/{id}", orderHandler.GetOrderByIDHandler)
 
 	r.Get("/swagger/*", httpSwagger.Handler(
-		httpSwagger.URL("doc.json"), // URL для JSON документации
+		httpSwagger.URL("doc.json"),
 	))
 
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {

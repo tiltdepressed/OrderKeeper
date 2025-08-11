@@ -10,12 +10,12 @@ import (
 type OrderService interface {
 	CreateOrder(order models.Order) error
 	GetOrderByID(id string) (models.Order, error)
-	RestoreCache() error // Новый метод для восстановления кэша
+	RestoreCache() error
 }
 
 type orderService struct {
 	repo  repository.OrderRepository
-	cache *cache.OrderCache // Добавляем кэш
+	cache *cache.OrderCache
 }
 
 func NewOrderService(repo repository.OrderRepository, cache *cache.OrderCache) OrderService {
