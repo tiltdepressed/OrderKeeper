@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	_ "orderkeeper/docs"
@@ -19,155 +20,162 @@ import (
 	"orderkeeper/internal/service"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
-	"github.com/joho/godotenv"
 	httpSwagger "github.com/swaggo/http-swagger"
 	"gorm.io/gorm"
 )
 
-type App struct {
-	DB            *gorm.DB
-	Cache         *cache.OrderCache
-	Service       service.OrderService
-	Handler       *handler.OrderHandler
-	KafkaConsumer *kafka.Consumer
-	Server        *http.Server
+// Config хранит всю конфигурацию приложения.
+type Config struct {
+	Port         string
+	DSN          string
+	KafkaBrokers string
+	KafkaTopic   string
+	KafkaGroupID string
 }
 
-func initConfig() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Printf("Warning: Error loading .env file: %v", err)
+// NewConfig загружает конфигурацию ИСКЛЮЧИТЕЛЬНО из переменных окружения.
+func NewConfig() (*Config, error) {
+	log.Println("Loading configuration...")
+	cfg := &Config{
+		Port:         os.Getenv("PORT"),
+		DSN:          os.Getenv("DSN"),
+		KafkaBrokers: os.Getenv("KAFKA_BROKERS"),
+		KafkaTopic:   os.Getenv("KAFKA_TOPIC"),
+		KafkaGroupID: os.Getenv("KAFKA_GROUP_ID"),
 	}
+
+	if cfg.Port == "" {
+		cfg.Port = "8080"
+	}
+	if cfg.DSN == "" {
+		return nil, errors.New("DSN environment variable is not set")
+	}
+	if cfg.KafkaBrokers == "" {
+		return nil, errors.New("KAFKA_BROKERS environment variable is not set")
+	}
+	if cfg.KafkaTopic == "" {
+		return nil, errors.New("KAFKA_TOPIC environment variable is not set")
+	}
+	if cfg.KafkaGroupID == "" {
+		return nil, errors.New("KAFKA_GROUP_ID environment variable is not set")
+	}
+	log.Println("Configuration loaded successfully.")
+	return cfg, nil
 }
 
-func initServices(db *gorm.DB, cache *cache.OrderCache) (service.OrderService, *handler.OrderHandler, error) {
-	orderRepository := repository.NewOrderRepository(db)
-	orderService := service.NewOrderService(orderRepository, cache)
-	orderHandler := handler.NewOrderHandler(orderService)
+// App является центральной структурой приложения, содержащей все зависимости.
+type App struct {
+	Config   *Config
+	DB       *gorm.DB
+	Cache    *cache.OrderCache
+	Service  service.OrderService
+	Consumer *kafka.Consumer
+	Server   *http.Server
+}
 
-	return orderService, orderHandler, nil
+// NewApp создает и инициализирует новый экземпляр приложения.
+func NewApp(cfg *Config) (*App, error) {
+	log.Println("Initializing application components...")
+
+	log.Println("1. Initializing database...")
+	database, err := db.InitDB(cfg.DSN)
+	if err != nil {
+		return nil, fmt.Errorf("could not initialize database: %w", err)
+	}
+	log.Println("Database initialized.")
+
+	log.Println("2. Initializing cache...")
+	orderCache := cache.NewOrderCache()
+	log.Println("Cache initialized.")
+
+	log.Println("3. Initializing services and repositories...")
+	orderRepo := repository.NewOrderRepository(database)
+	orderService := service.NewOrderService(orderRepo, orderCache)
+	orderHandler := handler.NewOrderHandler(orderService)
+	log.Println("Services and repositories initialized.")
+
+	log.Println("4. Restoring cache from database...")
+	if err := orderService.RestoreCache(); err != nil {
+		return nil, fmt.Errorf("failed to restore cache: %w", err)
+	}
+	log.Printf("Cache restored with %d orders.", orderCache.Count())
+
+	log.Println("5. Initializing Kafka consumer...")
+	kafkaConsumer, err := kafka.InitKafkaConsumer(cfg.KafkaBrokers, cfg.KafkaTopic, cfg.KafkaGroupID, orderService)
+	if err != nil {
+		return nil, fmt.Errorf("could not initialize Kafka consumer: %w", err)
+	}
+	log.Println("Kafka consumer initialized.")
+
+	log.Println("6. Setting up router and HTTP server...")
+	router := setupRouter(orderHandler)
+	server := &http.Server{
+		Addr:    ":" + cfg.Port,
+		Handler: router,
+	}
+	log.Println("Router and HTTP server configured.")
+
+	log.Println("Application components initialized successfully.")
+	return &App{
+		Config:   cfg,
+		DB:       database,
+		Cache:    orderCache,
+		Service:  orderService,
+		Consumer: kafkaConsumer,
+		Server:   server,
+	}, nil
+}
+
+// Run запускает все фоновые процессы и HTTP-сервер.
+func (a *App) Run(ctx context.Context) {
+	log.Println("Starting application...")
+	go a.Consumer.Run(ctx)
+	go func() {
+		log.Printf("Server starting and listening on port %s", a.Config.Port)
+		if err := a.Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("HTTP server error: %v", err)
+		}
+	}()
+}
+
+// ... (остальной код без изменений) ...
+func (a *App) Shutdown() {
+	log.Println("Shutting down server...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := a.Server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server shutdown failed: %v", err)
+	}
 }
 
 func setupRouter(orderHandler *handler.OrderHandler) *chi.Mux {
 	r := chi.NewRouter()
-
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
-	r.Use(chimiddleware.Timeout(60 * time.Second))
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasSuffix(r.URL.Path, ".js") {
-				w.Header().Set("Content-Type", "application/javascript")
-			}
-			next.ServeHTTP(w, r)
-		})
-	})
-
-	r.Post("/order", orderHandler.CreateOrderHandler)
 	r.Get("/order/{id}", orderHandler.GetOrderByIDHandler)
-
-	r.Get("/swagger/*", httpSwagger.Handler(
-		httpSwagger.URL("doc.json"),
-	))
-
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "web/index.html")
-	})
-	r.Handle("/web/*", http.StripPrefix("/web/", http.FileServer(http.Dir("web"))))
-
+	r.Get("/swagger/*", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))
+	r.Handle("/*", http.FileServer(http.Dir("web")))
 	return r
 }
 
-func startServer(router *chi.Mux) *http.Server {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	server := &http.Server{
-		Addr:    ":" + port,
-		Handler: router,
-	}
-
-	go func() {
-		log.Printf("Server started and listening on port %s", port)
-		log.Printf("Web interface: http://localhost:%s", port)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("HTTP server error: %v", err)
-		}
-	}()
-
-	return server
-}
-
-func gracefulShutdown(server *http.Server, cancel context.CancelFunc) {
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	sig := <-sigChan
-	log.Printf("Received signal %s, shutting down...", sig)
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("HTTP server shutdown failed: %v", err)
-	} else {
-		log.Println("HTTP server exited properly")
-	}
-
-	cancel()
-
-	select {
-	case <-time.After(5 * time.Second):
-		log.Println("Shutdown completed")
-	case <-shutdownCtx.Done():
-		log.Println("Shutdown timeout exceeded")
-	}
-}
-
 func main() {
-	initConfig()
-
-	db, err := db.InitDB()
+	cfg, err := NewConfig()
 	if err != nil {
-		log.Fatalf("Could not connect to db: %v", err)
+		log.Fatalf("Configuration error: %v", err)
 	}
-
-	orderCache := cache.NewOrderCache()
-
-	orderService, orderHandler, err := initServices(db, orderCache)
+	app, err := NewApp(cfg)
 	if err != nil {
-		log.Fatalf("Could not initialize services: %v", err)
+		log.Fatalf("Application initialization failed: %v", err)
 	}
-
-	if err := orderService.RestoreCache(); err != nil {
-		log.Fatalf("Failed to restore cache: %v", err)
-	}
-	log.Printf("Cache restored with %d orders", orderCache.Count())
-
-	kafkaConsumer, err := kafka.InitKafkaConsumer(orderService)
-	if err != nil {
-		log.Fatalf("Could not initialize Kafka consumer: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		log.Printf("Starting Kafka consumer (brokers: %s, topic: %s, group: %s)",
-			os.Getenv("KAFKA_BROKERS"), os.Getenv("KAFKA_TOPIC"), os.Getenv("KAFKA_GROUP_ID"))
-		kafkaConsumer.Run(ctx)
-	}()
-
-	router := setupRouter(orderHandler)
-	server := startServer(router)
-
-	gracefulShutdown(server, cancel)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	app.Run(ctx)
+	<-ctx.Done()
+	app.Shutdown()
+	log.Println("Application shut down gracefully.")
 }
