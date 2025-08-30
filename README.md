@@ -4,32 +4,15 @@
 
 ---
 
-## Особенности
-
--   **HTTP API**: Предоставляет эндпоинты для получения заказов по ID.
--   **Интеграция с Kafka**: Прослушивает топик Kafka для асинхронного получения и сохранения новых заказов.
--   **База данных PostgreSQL**: Использует PostgreSQL для надежного и постоянного хранения данных о заказах.
--   **Продвинутое кеширование**: Встроенный in-memory кеш для мгновенного доступа к данным. Реализованы:
-    -   **Мелкогранулярные блокировки (Sharding)** для высокой производительности при одновременных запросах.
-    -   **Инвалидация по TTL (Time-To-Live)** для предотвращения утечек памяти.
--   **Валидация данных**: Проверка корректности и осмысленности данных перед сохранением.
--   **Graceful Shutdown**: Корректное завершение работы сервиса, позволяющее завершить все текущие операции.
--   **Документация Swagger**: Автоматически генерируемая документация для API.
--   **Веб-интерфейс**: Простая HTML-страница для удобного получения заказа по его ID.
--   **Тестирование**: Проект покрыт юнит-тестами с использованием моков (`gomock`) для изоляции компонентов.
--   **Docker-окружение**: Полностью настроенный `docker-compose.yml` для легкого запуска всего стека (приложение, БД, Kafka).
-
----
-
 ## Технологии
 
--   **Язык**: Go
--   **База данных**: PostgreSQL
--   **Брокер сообщений**: Apache Kafka
--   **HTTP Роутер**: `go-chi/chi`
--   **ORM**: `gorm`
--   **Клиент Kafka**: `segmentio/kafka-go`
--   **Тестирование**: `stretchr/testify`, `uber-go/mock`
+- **Язык**: Go
+- **База данных**: PostgreSQL
+- **Брокер сообщений**: Apache Kafka
+- **HTTP Роутер**: `go-chi/chi`
+- **ORM**: `gorm`
+- **Клиент Kafka**: `segmentio/kafka-go`
+- **Тестирование**: `stretchr/testify`, `uber-go/mock`
 
 ---
 
@@ -60,15 +43,16 @@
 
 ### Предварительные требования
 
--   [Docker](https://www.docker.com/)
--   [Docker Compose](https://docs.docker.com/compose/)
--   [Go](https://golang.org/) (для локальной разработки и тестов)
+- [Docker](https://www.docker.com/)
+- [Docker Compose](https://docs.docker.com/compose/)
+- [Go](https://golang.org/) (для локальной разработки и тестов)
 
 ### Запуск с помощью Docker
 
 Это самый простой и рекомендуемый способ.
 
-1.  **Клонируйте репозиторий:**
+1. **Клонируйте репозиторий:**
+
   ```bash
     git clone https://github.com/tiltdepressed/OrderKeeper.git
     cd ./OrderKeeper
@@ -147,55 +131,55 @@
 -   **Топик Kafka**: `orders`
 -   **Пример сообщения (JSON)**:
    ```json
-	{
-	   "order_uid": "b563feb7b2b84b6test",
-	   "track_number": "WBILMTESTTRACK",
-	   "entry": "WBIL",
-	   "delivery": {
-	      "name": "Test Testov",
-	      "phone": "+9720000000",
-	      "zip": "2639809",
-	      "city": "Kiryat Mozkin",
-	      "address": "Ploshad Mira 15",
-	      "region": "Kraiot",
-	      "email": "test@gmail.com"
-	   },
-	   "payment": {
-	      "transaction": "b563feb7b2b84b6test",
-	      "request_id": "",
-	      "currency": "USD",
-	      "provider": "wbpay",
-	      "amount": 1817,
-	      "payment_dt": 1637907727,
-	      "bank": "alpha",
-	      "delivery_cost": 1500,
-	      "goods_total": 317,
-	      "custom_fee": 0
-	   },
-	   "items": [
-	      {
-	         "chrt_id": 9934930,
-	         "track_number": "WBILMTESTTRACK",
-	         "price": 453,
-	         "rid": "ab4219087a764ae0btest",
-	         "name": "Mascaras",
-	         "sale": 30,
-	         "size": "0",
-	         "total_price": 317,
-	         "nm_id": 2389212,
-	         "brand": "Vivienne Sabo",
-	         "status": 202
-	      }
-	   ],
-	   "locale": "en",
-	   "internal_signature": "",
-	   "customer_id": "test",
-	   "delivery_service": "meest",
-	   "shardkey": "9",
-	   "sm_id": 99,
-	   "date_created": "2021-11-26T06:22:19Z",
-	   "oof_shard": "1"
-	}
+ {
+    "order_uid": "b563feb7b2b84b6test",
+    "track_number": "WBILMTESTTRACK",
+    "entry": "WBIL",
+    "delivery": {
+       "name": "Test Testov",
+       "phone": "+9720000000",
+       "zip": "2639809",
+       "city": "Kiryat Mozkin",
+       "address": "Ploshad Mira 15",
+       "region": "Kraiot",
+       "email": "test@gmail.com"
+    },
+    "payment": {
+       "transaction": "b563feb7b2b84b6test",
+       "request_id": "",
+       "currency": "USD",
+       "provider": "wbpay",
+       "amount": 1817,
+       "payment_dt": 1637907727,
+       "bank": "alpha",
+       "delivery_cost": 1500,
+       "goods_total": 317,
+       "custom_fee": 0
+    },
+    "items": [
+       {
+          "chrt_id": 9934930,
+          "track_number": "WBILMTESTTRACK",
+          "price": 453,
+          "rid": "ab4219087a764ae0btest",
+          "name": "Mascaras",
+          "sale": 30,
+          "size": "0",
+          "total_price": 317,
+          "nm_id": 2389212,
+          "brand": "Vivienne Sabo",
+          "status": 202
+       }
+    ],
+    "locale": "en",
+    "internal_signature": "",
+    "customer_id": "test",
+    "delivery_service": "meest",
+    "shardkey": "9",
+    "sm_id": 99,
+    "date_created": "2021-11-26T06:22:19Z",
+    "oof_shard": "1"
+ }
     ```
 
 ---
