@@ -1,11 +1,16 @@
-// Package service
+//go:generate go run go.uber.org/mock/mockgen -source=order.go -destination=mocks/mock_order_service.go -package=mocks
 package service
 
 import (
+	"errors"
 	"orderkeeper/internal/cache"
 	"orderkeeper/internal/models"
 	"orderkeeper/internal/repository"
+
+	"gorm.io/gorm"
 )
+
+var ErrOrderNotFound = errors.New("order not found")
 
 type OrderService interface {
 	CreateOrder(order models.Order) error
@@ -38,6 +43,9 @@ func (s *orderService) GetOrderByID(id string) (models.Order, error) {
 
 	order, err := s.repo.GetOrderByID(id)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return models.Order{}, ErrOrderNotFound
+		}
 		return models.Order{}, err
 	}
 

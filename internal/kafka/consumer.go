@@ -7,6 +7,7 @@ import (
 	"log"
 	"orderkeeper/internal/models"
 	"orderkeeper/internal/service"
+	"os"
 
 	kafka "github.com/segmentio/kafka-go"
 )
@@ -66,4 +67,26 @@ func (c *Consumer) Run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func InitKafkaConsumer(orderService service.OrderService) (*Consumer, error) {
+	kafkaBrokers := os.Getenv("KAFKA_BROKERS")
+	if kafkaBrokers == "" {
+		kafkaBrokers = "localhost:9092"
+	}
+	kafkaTopic := os.Getenv("KAFKA_TOPIC")
+	if kafkaTopic == "" {
+		kafkaTopic = "orders"
+	}
+	kafkaGroupID := os.Getenv("KAFKA_GROUP_ID")
+	if kafkaGroupID == "" {
+		kafkaGroupID = "order-service-group"
+	}
+
+	return NewConsumer(
+		[]string{kafkaBrokers},
+		kafkaTopic,
+		kafkaGroupID,
+		orderService,
+	), nil
 }

@@ -19,17 +19,34 @@ var (
 
 func InitDB() (*gorm.DB, error) {
 	dsn := os.Getenv("DSN")
+	maxAttempts := 5
+	initialDelay := 2 * time.Second
+	var dbInstance *gorm.DB
+	var err error
 
-	for i := range 5 {
-		db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		dbInstance, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 		if err == nil {
-			break
+			// Миграция моделей
+			err = dbInstance.AutoMigrate(
+				&models.Order{},
+				&models.Delivery{},
+				&models.Payment{},
+				&models.Item{},
+			)
+			if err != nil {
+				return nil, err
+			}
+			return dbInstance, nil
 		}
-		log.Printf("Connection attempt %d failed: %v", i+1, err)
-		time.Sleep(time.Second * time.Duration(math.Pow(2, float64(i))))
+
+		log.Printf("Attempt %d/%d: failed to connect to database: %v", attempt, maxAttempts, err)
+		if attempt < maxAttempts {
+			delay := time.Duration(math.Pow(2, float64(attempt-1))) * initialDelay
+			log.Printf("Retrying in %v...", delay)
+			time.Sleep(delay)
+		}
 	}
-	if err = db.AutoMigrate(&models.Delivery{}, &models.Payment{}, &models.Item{}, &models.Order{}); err != nil {
-		log.Fatalf("Could not migrate: %v", err)
-	}
-	return db, nil
+
+	return nil, err
 }

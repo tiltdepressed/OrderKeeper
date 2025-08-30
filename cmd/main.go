@@ -1,21 +1,20 @@
 // @title OrderKeeper API
 // @version 1.0
 // @description API for managing orders
-
 // @host localhost:8080
 // @BasePath /
 package main
 
 import (
 	"context"
+	"errors"
 	"log"
-	"math"
 	"net/http"
 	_ "orderkeeper/docs"
 	"orderkeeper/internal/cache"
+	"orderkeeper/internal/db"
 	"orderkeeper/internal/handler"
 	"orderkeeper/internal/kafka"
-	"orderkeeper/internal/models"
 	"orderkeeper/internal/repository"
 	"orderkeeper/internal/service"
 	"os"
@@ -28,63 +27,36 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/joho/godotenv"
 	httpSwagger "github.com/swaggo/http-swagger"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
-func main() {
+type App struct {
+	DB            *gorm.DB
+	Cache         *cache.OrderCache
+	Service       service.OrderService
+	Handler       *handler.OrderHandler
+	KafkaConsumer *kafka.Consumer
+	Server        *http.Server
+}
+
+func initConfig() {
 	err := godotenv.Load()
 	if err != nil {
 		log.Printf("Warning: Error loading .env file: %v", err)
 	}
+}
 
-	database, err := initDBWithRetry(5, 2*time.Second)
-	if err != nil {
-		log.Fatalf("Could not connect to db: %v", err)
-	}
-
-	orderCache := cache.NewOrderCache()
-
-	orderRepository := repository.NewOrderRepository(database)
-	orderService := service.NewOrderService(orderRepository, orderCache)
+func initServices(db *gorm.DB, cache *cache.OrderCache) (service.OrderService, *handler.OrderHandler, error) {
+	orderRepository := repository.NewOrderRepository(db)
+	orderService := service.NewOrderService(orderRepository, cache)
 	orderHandler := handler.NewOrderHandler(orderService)
 
-	if err := orderService.RestoreCache(); err != nil {
-		log.Fatalf("Failed to restore cache: %v", err)
-	}
-	log.Printf("Cache restored with %d orders", orderCache.Count())
+	return orderService, orderHandler, nil
+}
 
-	kafkaBrokers := os.Getenv("KAFKA_BROKERS")
-	if kafkaBrokers == "" {
-		kafkaBrokers = "localhost:9092"
-	}
-	kafkaTopic := os.Getenv("KAFKA_TOPIC")
-	if kafkaTopic == "" {
-		kafkaTopic = "orders"
-	}
-	kafkaGroupID := os.Getenv("KAFKA_GROUP_ID")
-	if kafkaGroupID == "" {
-		kafkaGroupID = "order-service-group"
-	}
-
-	kafkaConsumer := kafka.NewConsumer(
-		[]string{kafkaBrokers},
-		kafkaTopic,
-		kafkaGroupID,
-		orderService, // передаем только сервис
-	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		log.Printf("Starting Kafka consumer (brokers: %s, topic: %s, group: %s)",
-			kafkaBrokers, kafkaTopic, kafkaGroupID)
-
-		kafkaConsumer.Run(ctx)
-	}()
-
+func setupRouter(orderHandler *handler.OrderHandler) *chi.Mux {
 	r := chi.NewRouter()
+
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.Timeout(60 * time.Second))
@@ -109,6 +81,10 @@ func main() {
 	})
 	r.Handle("/web/*", http.StripPrefix("/web/", http.FileServer(http.Dir("web"))))
 
+	return r
+}
+
+func startServer(router *chi.Mux) *http.Server {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -116,27 +92,26 @@ func main() {
 
 	server := &http.Server{
 		Addr:    ":" + port,
-		Handler: r,
+		Handler: router,
 	}
 
-	serverErr := make(chan error, 1)
 	go func() {
 		log.Printf("Server started and listening on port %s", port)
 		log.Printf("Web interface: http://localhost:%s", port)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			serverErr <- err
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("HTTP server error: %v", err)
 		}
 	}()
 
+	return server
+}
+
+func gracefulShutdown(server *http.Server, cancel context.CancelFunc) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	select {
-	case sig := <-sigChan:
-		log.Printf("Received signal %s, shutting down...", sig)
-	case err := <-serverErr:
-		log.Printf("HTTP server error: %v", err)
-	}
+	sig := <-sigChan
+	log.Printf("Received signal %s, shutting down...", sig)
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
@@ -157,37 +132,42 @@ func main() {
 	}
 }
 
-func initDBWithRetry(maxAttempts int, initialDelay time.Duration) (*gorm.DB, error) {
-	dsn := os.Getenv("DSN")
-	var dbInstance *gorm.DB
-	var err error
+func main() {
+	initConfig()
 
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		dbInstance, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
-		if err == nil {
-			if err = dbInstance.AutoMigrate(
-				&models.Order{},
-			); err != nil {
-				return nil, err
-			}
-
-			if err = dbInstance.AutoMigrate(
-				&models.Delivery{},
-				&models.Payment{},
-				&models.Item{},
-			); err != nil {
-				return nil, err
-			}
-			return dbInstance, nil
-		}
-
-		log.Printf("Attempt %d/%d: failed to connect to database: %v", attempt, maxAttempts, err)
-		if attempt < maxAttempts {
-			delay := time.Duration(math.Pow(2, float64(attempt-1))) * initialDelay
-			log.Printf("Retrying in %v...", delay)
-			time.Sleep(delay)
-		}
+	db, err := db.InitDB()
+	if err != nil {
+		log.Fatalf("Could not connect to db: %v", err)
 	}
 
-	return nil, err
+	orderCache := cache.NewOrderCache()
+
+	orderService, orderHandler, err := initServices(db, orderCache)
+	if err != nil {
+		log.Fatalf("Could not initialize services: %v", err)
+	}
+
+	if err := orderService.RestoreCache(); err != nil {
+		log.Fatalf("Failed to restore cache: %v", err)
+	}
+	log.Printf("Cache restored with %d orders", orderCache.Count())
+
+	kafkaConsumer, err := kafka.InitKafkaConsumer(orderService)
+	if err != nil {
+		log.Fatalf("Could not initialize Kafka consumer: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		log.Printf("Starting Kafka consumer (brokers: %s, topic: %s, group: %s)",
+			os.Getenv("KAFKA_BROKERS"), os.Getenv("KAFKA_TOPIC"), os.Getenv("KAFKA_GROUP_ID"))
+		kafkaConsumer.Run(ctx)
+	}()
+
+	router := setupRouter(orderHandler)
+	server := startServer(router)
+
+	gracefulShutdown(server, cancel)
 }

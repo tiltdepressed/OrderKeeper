@@ -6,14 +6,17 @@ require (
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/joho/godotenv v1.5.1
 	github.com/segmentio/kafka-go v0.4.48
+	github.com/stretchr/testify v1.11.1
 	github.com/swaggo/http-swagger v1.3.4
 	github.com/swaggo/swag v1.16.6
+	go.uber.org/mock v0.6.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.30.1
 )
 
 require (
 	github.com/KyleBanks/depth v1.2.1 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-openapi/jsonpointer v0.21.2 // indirect
 	github.com/go-openapi/jsonreference v0.21.0 // indirect
 	github.com/go-openapi/spec v0.21.0 // indirect
@@ -28,6 +31,7 @@ require (
 	github.com/klauspost/compress v1.15.11 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.16 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rogpeppe/go-internal v1.12.0 // indirect
 	github.com/swaggo/files v1.0.1 // indirect
 	golang.org/x/crypto v0.41.0 // indirect

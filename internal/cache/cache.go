@@ -2,44 +2,129 @@
 package cache
 
 import (
+	"hash/fnv"
 	"orderkeeper/internal/models"
 	"sync"
+	"time"
 )
 
-type OrderCache struct {
+const (
+	shardCount              = 256
+	defaultEvictionInterval = 5 * time.Minute
+	defaultTTL              = 10 * time.Minute
+)
+
+type cacheItem struct {
+	order     models.Order
+	expiresAt time.Time
+}
+
+type cacheShard struct {
 	mu    sync.RWMutex
-	items map[string]models.Order
+	items map[string]cacheItem
+}
+
+type OrderCache struct {
+	shards []*cacheShard
+	stop   chan struct{}
 }
 
 func NewOrderCache() *OrderCache {
-	return &OrderCache{
-		items: make(map[string]models.Order),
+	c := &OrderCache{
+		shards: make([]*cacheShard, shardCount),
+		stop:   make(chan struct{}),
 	}
+	for i := 0; i < shardCount; i++ {
+		c.shards[i] = &cacheShard{
+			items: make(map[string]cacheItem),
+		}
+	}
+
+	go c.runEvictionLoop(defaultEvictionInterval)
+
+	return c
+}
+
+func (c *OrderCache) getShard(key string) *cacheShard {
+	hasher := fnv.New32a()
+	hasher.Write([]byte(key))
+	return c.shards[hasher.Sum32()%shardCount]
 }
 
 func (c *OrderCache) Set(order models.Order) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.items[order.OrderUID] = order
+	shard := c.getShard(order.OrderUID)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	shard.items[order.OrderUID] = cacheItem{
+		order:     order,
+		expiresAt: time.Now().Add(defaultTTL),
+	}
 }
 
 func (c *OrderCache) Get(uid string) (models.Order, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	order, exists := c.items[uid]
-	return order, exists
+	shard := c.getShard(uid)
+	shard.mu.RLock()
+	defer shard.mu.RUnlock()
+
+	item, exists := shard.items[uid]
+	if !exists || time.Now().After(item.expiresAt) {
+		return models.Order{}, false
+	}
+
+	return item.order, true
 }
 
 func (c *OrderCache) LoadFromDB(orders []models.Order) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	for _, order := range orders {
-		c.items[order.OrderUID] = order
+		c.Set(order)
 	}
 }
 
 func (c *OrderCache) Count() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return len(c.items)
+	count := 0
+	now := time.Now()
+	for i := 0; i < shardCount; i++ {
+		shard := c.shards[i]
+		shard.mu.RLock()
+		for _, item := range shard.items {
+			if now.Before(item.expiresAt) {
+				count++
+			}
+		}
+		shard.mu.RUnlock()
+	}
+	return count
+}
+
+func (c *OrderCache) runEvictionLoop(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			c.evictExpired()
+		case <-c.stop:
+			return
+		}
+	}
+}
+
+func (c *OrderCache) evictExpired() {
+	now := time.Now()
+	for i := 0; i < shardCount; i++ {
+		shard := c.shards[i]
+		shard.mu.Lock()
+		for uid, item := range shard.items {
+			if now.After(item.expiresAt) {
+				delete(shard.items, uid)
+			}
+		}
+		shard.mu.Unlock()
+	}
+}
+
+func (c *OrderCache) StopEviction() {
+	close(c.stop)
 }

@@ -1,4 +1,4 @@
-// Package repository
+//go:generate go run go.uber.org/mock/mockgen -source=order.go -destination=mocks/mock_order_repository.go -package=mocks
 package repository
 
 import (
