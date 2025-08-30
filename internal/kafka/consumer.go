@@ -35,6 +35,33 @@ func NewConsumer(
 	}
 }
 
+func (c *Consumer) handleMessage(ctx context.Context, msg kafka.Message) {
+	log.Printf("Message received on topic %s, partition %d, offset %d", msg.Topic, msg.Partition, msg.Offset)
+
+	var order models.Order
+	if err := json.Unmarshal(msg.Value, &order); err != nil {
+		log.Printf("Failed to unmarshal order: %v. Message: %s. Skipping message.", err, string(msg.Value))
+		if err := c.reader.CommitMessages(ctx, msg); err != nil {
+			log.Printf("Failed to commit bad message: %v", err)
+		}
+		return
+	}
+
+	if err := c.svc.CreateOrder(order); err != nil {
+		log.Printf("Failed to process order '%s': %v. Skipping message.", order.OrderUID, err)
+		if err := c.reader.CommitMessages(ctx, msg); err != nil {
+			log.Printf("Failed to commit bad message: %v", err)
+		}
+		return
+	}
+
+	log.Printf("Order '%s' processed and saved successfully.", order.OrderUID)
+
+	if err := c.reader.CommitMessages(ctx, msg); err != nil {
+		log.Printf("Failed to commit message for order '%s': %v", order.OrderUID, err)
+	}
+}
+
 func (c *Consumer) Run(ctx context.Context) {
 	defer c.reader.Close()
 	log.Println("Kafka consumer is running and waiting for messages...")
@@ -53,33 +80,11 @@ func (c *Consumer) Run(ctx context.Context) {
 				log.Printf("Error fetching message: %v", err)
 				continue
 			}
-
-			log.Printf("Message received on topic %s, partition %d, offset %d", msg.Topic, msg.Partition, msg.Offset)
-
-			var order models.Order
-			if err := json.Unmarshal(msg.Value, &order); err != nil {
-				log.Printf("Failed to unmarshal order: %v. Message: %s", err, string(msg.Value))
-				if err := c.reader.CommitMessages(ctx, msg); err != nil {
-					log.Printf("Failed to commit bad message: %v", err)
-				}
-				continue
-			}
-
-			if err := c.svc.CreateOrder(order); err != nil {
-				log.Printf("Failed to save order '%s': %v", order.OrderUID, err)
-				continue
-			}
-
-			log.Printf("Order '%s' processed and saved successfully.", order.OrderUID)
-
-			if err := c.reader.CommitMessages(ctx, msg); err != nil {
-				log.Printf("Failed to commit message for order '%s': %v", order.OrderUID, err)
-			}
+			c.handleMessage(ctx, msg)
 		}
 	}
 }
 
-// InitKafkaConsumer инициализирует консьюмер из переданных параметров.
 func InitKafkaConsumer(brokersStr, topic, groupID string, orderService service.OrderService) (*Consumer, error) {
 	if brokersStr == "" {
 		return nil, errors.New("kafka brokers string is not set")

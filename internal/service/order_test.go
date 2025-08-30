@@ -18,7 +18,6 @@ func TestOrderService_GetOrderByID(t *testing.T) {
 
 	mockRepo := mocks.NewMockOrderRepository(ctrl)
 	orderCache := cache.NewOrderCache()
-	defer orderCache.StopEviction() // Не забываем остановить горутину очистки
 
 	orderService := NewOrderService(mockRepo, orderCache)
 
@@ -35,7 +34,6 @@ func TestOrderService_GetOrderByID(t *testing.T) {
 
 	t.Run("not in cache, found in db", func(t *testing.T) {
 		cleanCache := cache.NewOrderCache()
-		defer cleanCache.StopEviction()
 		serviceWithCleanCache := NewOrderService(mockRepo, cleanCache)
 
 		mockRepo.EXPECT().GetOrderByID("test-uid-123").Return(testOrder, nil)
@@ -51,7 +49,6 @@ func TestOrderService_GetOrderByID(t *testing.T) {
 
 	t.Run("not found anywhere", func(t *testing.T) {
 		cleanCache := cache.NewOrderCache()
-		defer cleanCache.StopEviction()
 		serviceWithCleanCache := NewOrderService(mockRepo, cleanCache)
 
 		mockRepo.EXPECT().GetOrderByID("non-existent-uid").Return(models.Order{}, gorm.ErrRecordNotFound)
