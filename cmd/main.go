@@ -29,7 +29,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// Config хранит всю конфигурацию приложения.
 type Config struct {
 	Port         string
 	DSN          string
@@ -38,7 +37,6 @@ type Config struct {
 	KafkaGroupID string
 }
 
-// NewConfig загружает конфигурацию ИСКЛЮЧИТЕЛЬНО из переменных окружения.
 func NewConfig() (*Config, error) {
 	log.Println("Loading configuration...")
 	cfg := &Config{
@@ -68,7 +66,6 @@ func NewConfig() (*Config, error) {
 	return cfg, nil
 }
 
-// App является центральной структурой приложения, содержащей все зависимости.
 type App struct {
 	Config   *Config
 	DB       *gorm.DB
@@ -78,49 +75,33 @@ type App struct {
 	Server   *http.Server
 }
 
-// NewApp создает и инициализирует новый экземпляр приложения.
 func NewApp(cfg *Config) (*App, error) {
-	log.Println("Initializing application components...")
-
-	log.Println("1. Initializing database...")
 	database, err := db.InitDB(cfg.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("could not initialize database: %w", err)
 	}
-	log.Println("Database initialized.")
 
-	log.Println("2. Initializing cache...")
 	orderCache := cache.NewOrderCache()
-	log.Println("Cache initialized.")
 
-	log.Println("3. Initializing services and repositories...")
 	orderRepo := repository.NewOrderRepository(database)
 	orderService := service.NewOrderService(orderRepo, orderCache)
 	orderHandler := handler.NewOrderHandler(orderService)
-	log.Println("Services and repositories initialized.")
 
-	log.Println("4. Restoring cache from database...")
 	if err := orderService.RestoreCache(); err != nil {
 		return nil, fmt.Errorf("failed to restore cache: %w", err)
 	}
-	log.Printf("Cache restored with %d orders.", orderCache.Count())
 
-	log.Println("5. Initializing Kafka consumer...")
 	kafkaConsumer, err := kafka.InitKafkaConsumer(cfg.KafkaBrokers, cfg.KafkaTopic, cfg.KafkaGroupID, orderService)
 	if err != nil {
 		return nil, fmt.Errorf("could not initialize Kafka consumer: %w", err)
 	}
-	log.Println("Kafka consumer initialized.")
 
-	log.Println("6. Setting up router and HTTP server...")
 	router := setupRouter(orderHandler)
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: router,
 	}
-	log.Println("Router and HTTP server configured.")
 
-	log.Println("Application components initialized successfully.")
 	return &App{
 		Config:   cfg,
 		DB:       database,
@@ -131,7 +112,6 @@ func NewApp(cfg *Config) (*App, error) {
 	}, nil
 }
 
-// Run запускает все фоновые процессы и HTTP-сервер.
 func (a *App) Run(ctx context.Context) {
 	log.Println("Starting application...")
 	go a.Consumer.Run(ctx)
@@ -143,7 +123,6 @@ func (a *App) Run(ctx context.Context) {
 	}()
 }
 
-// ... (остальной код без изменений) ...
 func (a *App) Shutdown() {
 	log.Println("Shutting down server...")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

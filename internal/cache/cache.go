@@ -1,53 +1,56 @@
-// Package cache
+// Package cache реализует потокобезопасный, шардированный LRU-кеш.
 package cache
 
 import (
+	"container/list"
 	"hash/fnv"
 	"orderkeeper/internal/models"
 	"sync"
-	"time"
 )
 
 const (
-	shardCount              = 256
-	defaultEvictionInterval = 5 * time.Minute
-	defaultTTL              = 10 * time.Minute
+	defaultMaxCacheSize = 1000
+	shardCount          = 256
 )
 
-type cacheItem struct {
-	order     models.Order
-	expiresAt time.Time
+type cacheEntry struct {
+	key   string
+	order models.Order
 }
 
 type cacheShard struct {
-	mu    sync.RWMutex
-	items map[string]cacheItem
+	mu       sync.Mutex
+	capacity int
+	ll       *list.List
+	items    map[string]*list.Element
 }
 
 type OrderCache struct {
 	shards []*cacheShard
-	stop   chan struct{}
 }
 
 func NewOrderCache() *OrderCache {
 	c := &OrderCache{
 		shards: make([]*cacheShard, shardCount),
-		stop:   make(chan struct{}),
 	}
+	shardCapacity := defaultMaxCacheSize / shardCount
+	if shardCapacity < 1 {
+		shardCapacity = 1
+	}
+
 	for i := 0; i < shardCount; i++ {
 		c.shards[i] = &cacheShard{
-			items: make(map[string]cacheItem),
+			capacity: shardCapacity,
+			ll:       list.New(),
+			items:    make(map[string]*list.Element),
 		}
 	}
-
-	go c.runEvictionLoop(defaultEvictionInterval)
-
 	return c
 }
 
 func (c *OrderCache) getShard(key string) *cacheShard {
 	hasher := fnv.New32a()
-	hasher.Write([]byte(key))
+	_, _ = hasher.Write([]byte(key))
 	return c.shards[hasher.Sum32()%shardCount]
 }
 
@@ -56,23 +59,36 @@ func (c *OrderCache) Set(order models.Order) {
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 
-	shard.items[order.OrderUID] = cacheItem{
-		order:     order,
-		expiresAt: time.Now().Add(defaultTTL),
+	if elem, ok := shard.items[order.OrderUID]; ok {
+		shard.ll.MoveToFront(elem)
+		elem.Value.(*cacheEntry).order = order
+		return
 	}
+
+	if shard.ll.Len() >= shard.capacity {
+		oldest := shard.ll.Back()
+		if oldest != nil {
+			removedEntry := shard.ll.Remove(oldest).(*cacheEntry)
+			delete(shard.items, removedEntry.key)
+		}
+	}
+
+	newEntry := &cacheEntry{key: order.OrderUID, order: order}
+	elem := shard.ll.PushFront(newEntry)
+	shard.items[order.OrderUID] = elem
 }
 
 func (c *OrderCache) Get(uid string) (models.Order, bool) {
 	shard := c.getShard(uid)
-	shard.mu.RLock()
-	defer shard.mu.RUnlock()
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
 
-	item, exists := shard.items[uid]
-	if !exists || time.Now().After(item.expiresAt) {
-		return models.Order{}, false
+	if elem, ok := shard.items[uid]; ok {
+		shard.ll.MoveToFront(elem)
+		return elem.Value.(*cacheEntry).order, true
 	}
 
-	return item.order, true
+	return models.Order{}, false
 }
 
 func (c *OrderCache) LoadFromDB(orders []models.Order) {
@@ -83,48 +99,11 @@ func (c *OrderCache) LoadFromDB(orders []models.Order) {
 
 func (c *OrderCache) Count() int {
 	count := 0
-	now := time.Now()
-	for i := 0; i < shardCount; i++ {
-		shard := c.shards[i]
-		shard.mu.RLock()
-		for _, item := range shard.items {
-			if now.Before(item.expiresAt) {
-				count++
-			}
-		}
-		shard.mu.RUnlock()
-	}
-	return count
-}
-
-func (c *OrderCache) runEvictionLoop(interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			c.evictExpired()
-		case <-c.stop:
-			return
-		}
-	}
-}
-
-func (c *OrderCache) evictExpired() {
-	now := time.Now()
 	for i := 0; i < shardCount; i++ {
 		shard := c.shards[i]
 		shard.mu.Lock()
-		for uid, item := range shard.items {
-			if now.After(item.expiresAt) {
-				delete(shard.items, uid)
-			}
-		}
+		count += shard.ll.Len()
 		shard.mu.Unlock()
 	}
-}
-
-func (c *OrderCache) StopEviction() {
-	close(c.stop)
+	return count
 }

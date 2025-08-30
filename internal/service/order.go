@@ -6,6 +6,7 @@ import (
 	"orderkeeper/internal/cache"
 	"orderkeeper/internal/models"
 	"orderkeeper/internal/repository"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -27,7 +28,39 @@ func NewOrderService(repo repository.OrderRepository, cache *cache.OrderCache) O
 	return &orderService{repo: repo, cache: cache}
 }
 
+func (s *orderService) validateOrder(order *models.Order) error {
+	if order.OrderUID == "" {
+		return errors.New("order_uid is required")
+	}
+	if order.TrackNumber == "" {
+		return errors.New("track_number is required")
+	}
+	if order.Delivery.Name == "" {
+		return errors.New("delivery name is required")
+	}
+	if order.Delivery.Phone == "" {
+		return errors.New("delivery phone is required")
+	}
+	if !strings.Contains(order.Delivery.Email, "@") {
+		return errors.New("delivery email is invalid")
+	}
+	if order.Payment.Transaction == "" {
+		return errors.New("payment transaction is required")
+	}
+	if order.Payment.Amount <= 0 {
+		return errors.New("payment amount must be positive")
+	}
+	if len(order.Items) == 0 {
+		return errors.New("order must contain at least one item")
+	}
+	return nil
+}
+
 func (s *orderService) CreateOrder(order models.Order) error {
+	if err := s.validateOrder(&order); err != nil {
+		return err
+	}
+
 	if err := s.repo.CreateOrder(order); err != nil {
 		return err
 	}
