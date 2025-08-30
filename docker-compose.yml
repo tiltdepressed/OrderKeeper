@@ -1,19 +1,24 @@
+version: '3.8'
+
 services:
   postgres:
     image: postgres:14-alpine
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: 12345678
-      POSTGRES_DB: order_db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-12345678}
+      POSTGRES_DB: ${POSTGRES_DB:-order_db}
     ports:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-order_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: always
+    networks:
+      - order-network
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.3.0
@@ -22,6 +27,9 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
+    restart: always
+    networks:
+      - order-network
 
   kafka:
     image: confluentinc/cp-kafka:7.3.0
@@ -37,30 +45,41 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    # Эта проверка заставит другие сервисы ждать, пока Kafka будет готов
     healthcheck:
-      test: ["CMD", "kafka-topics", "--list", "--bootstrap-server", "kafka:29092"]
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:29092", "--list"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
+    restart: always
+    networks:
+      - order-network
 
   app:
     build: .
     ports:
       - "8080:8080"
     environment:
-      PORT: 8080
-      DSN: "host=postgres user=postgres password=a14041977A dbname=order_db port=5432 sslmode=disable"
-      KAFKA_BROKERS: kafka:9092
-      KAFKA_TOPIC: orders
-      KAFKA_GROUP_ID: order-service-group
+      PORT: ${PORT}
+      DSN: ${DSN}
+      KAFKA_BROKERS: ${KAFKA_BROKERS}
+      KAFKA_TOPIC: ${KAFKA_TOPIC}
+      KAFKA_GROUP_ID: ${KAFKA_GROUP_ID}
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
       kafka:
+        # Теперь app ждет, пока Kafka не станет "здоровым"
         condition: service_healthy
+    restart: always
+    networks:
+      - order-network
 
 volumes:
   postgres_data:
-  redis_data:
+
+networks:
+  order-network:
+    driver: bridge

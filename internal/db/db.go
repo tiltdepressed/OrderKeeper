@@ -5,20 +5,13 @@ import (
 	"log"
 	"math"
 	"orderkeeper/internal/models"
-	"os"
 	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
-var (
-	db  *gorm.DB
-	err error
-)
-
-func InitDB() (*gorm.DB, error) {
-	dsn := os.Getenv("DSN")
+func InitDB(dsn string) (*gorm.DB, error) {
 	maxAttempts := 5
 	initialDelay := 2 * time.Second
 	var dbInstance *gorm.DB
@@ -27,7 +20,7 @@ func InitDB() (*gorm.DB, error) {
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		dbInstance, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 		if err == nil {
-			// Миграция моделей
+			log.Println("Database connection successful.")
 			err = dbInstance.AutoMigrate(
 				&models.Order{},
 				&models.Delivery{},
@@ -37,6 +30,7 @@ func InitDB() (*gorm.DB, error) {
 			if err != nil {
 				return nil, err
 			}
+			log.Println("Database migration successful.")
 			return dbInstance, nil
 		}
 
